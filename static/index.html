@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sherlock Hub — Единый агрегатор открытых OSINT-источников</title>
+  <meta name="description" content="Объединённый поиск по открытым OSINT-базам: Sherlock, Maigret, публичные API, DNS/MX/Gravatar/PGP для email, метаданные телефонов и доменов.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="/" class="brand" id="brand-reset">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"></circle>
+            <path d="m20 20-3.5-3.5"></path>
+            <circle cx="11" cy="11" r="2.2"></circle>
+          </svg>
+        </span>
+        <span class="brand-title">Sherlock Hub</span>
+        <span class="brand-sub">OSINT Aggregator</span>
+      </a>
+
+      <nav class="topbar-actions" aria-label="Инструменты">
+        <button type="button" class="nav-btn" id="btn-engines">
+          <span>Движки</span>
+          <span class="nav-count" id="engines-badge">…</span>
+        </button>
+        <button type="button" class="nav-btn" id="btn-history">
+          <span>История</span>
+          <span class="nav-count" id="history-badge">0</span>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="search-section" id="search-section">
+      <div class="hero-copy">
+        <h1>Единый поиск по открытым OSINT-базам</h1>
+        <p class="hero-lead">
+          Параллельный запуск <strong>Sherlock</strong>, <strong>Maigret</strong>, публичных API и пассивных проверок
+          с автоматической дедупликацией, корреляцией профиля и экспортом досье.
+        </p>
+      </div>
+
+      <form class="search-panel" id="search-form" autocomplete="off">
+        <div class="input-row">
+          <div class="input-wrap">
+            <input
+              type="text"
+              id="query-input"
+              name="q"
+              placeholder="Введите никнейм, email, телефон (+1...) или домен"
+              aria-label="Поисковый запрос"
+              required
+            >
+            <span class="detected-tag" id="detected-tag" title="Автоопределение типа запроса">Авто</span>
+          </div>
+          <button type="submit" class="btn-primary" id="btn-submit">
+            <span class="btn-label">Найти</span>
+          </button>
+          <button type="button" class="btn-stop hidden" id="btn-stop">Остановить</button>
+        </div>
+
+        <div class="controls-row">
+          <div class="control-group">
+            <span class="control-label">Тип</span>
+            <div class="segmented" id="type-segmented" role="radiogroup" aria-label="Тип запроса">
+              <button type="button" class="seg-btn active" data-type="auto">Авто</button>
+              <button type="button" class="seg-btn" data-type="username">Username</button>
+              <button type="button" class="seg-btn" data-type="email">Email</button>
+              <button type="button" class="seg-btn" data-type="phone">Телефон</button>
+              <button type="button" class="seg-btn" data-type="domain">Домен</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <span class="control-label">Глубина</span>
+            <div class="segmented" id="depth-segmented" role="radiogroup" aria-label="Глубина сканирования">
+              <button type="button" class="seg-btn" data-depth="fast" title="~15 сек: Direct APIs + Maigret Top-80 + Sherlock">Быстрый</button>
+              <button type="button" class="seg-btn active" data-depth="standard" title="~40 сек: Direct APIs + Sherlock + Maigret Top-250">Стандарт</button>
+              <button type="button" class="seg-btn" data-depth="deep" title="~120 сек: Direct APIs + Sherlock + Maigret Top-800">Глубокий</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="engines-inline" id="engines-inline"></div>
+
+        <div class="examples-row">
+          <span class="examples-label">Примеры:</span>
+          <button type="button" class="example-chip" data-sample="torvalds">torvalds</button>
+          <button type="button" class="example-chip" data-sample="gvanrossum">gvanrossum</button>
+          <button type="button" class="example-chip" data-sample="github.com">github.com</button>
+          <button type="button" class="example-chip" data-sample="+16502530000">+16502530000</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Live Engine Progress -->
+    <section class="progress-strip hidden" id="progress-strip" aria-live="polite">
+      <div class="progress-head">
+        <div class="progress-title-row">
+          <span class="status-dot" id="run-dot"></span>
+          <span class="progress-heading" id="progress-heading">Выполняется поиск…</span>
+        </div>
+        <span class="progress-meta mono" id="progress-meta"></span>
+      </div>
+      <div class="engine-chips" id="engine-chips"></div>
+    </section>
+
+    <!-- Dossier Summary -->
+    <section class="dossier-bar hidden" id="dossier-bar">
+      <div class="dossier-main">
+        <img id="dossier-avatar" class="dossier-avatar hidden" alt="Аватар профиля" loading="lazy">
+        <div class="dossier-identity">
+          <div class="dossier-kicker">
+            <span class="type-pill" id="dossier-type"></span>
+            <span class="mono muted" id="dossier-time"></span>
+          </div>
+          <h2 class="dossier-title" id="dossier-title"></h2>
+          <p class="dossier-bio hidden" id="dossier-bio"></p>
+          <div class="dossier-facts" id="dossier-facts"></div>
+        </div>
+      </div>
+
+      <div class="dossier-right">
+        <div class="metrics-row">
+          <div class="metric">
+            <span class="metric-val mono" id="metric-unique">0</span>
+            <span class="metric-lbl">уникальных</span>
+          </div>
+          <div class="metric">
+            <span class="metric-val mono accent" id="metric-multi">0</span>
+            <span class="metric-lbl">≥2 движка</span>
+          </div>
+        </div>
+        <div class="export-group hidden" id="export-group">
+          <button type="button" class="btn-ghost" data-export="json">JSON</button>
+          <button type="button" class="btn-ghost" data-export="csv">CSV</button>
+          <button type="button" class="btn-ghost" data-export="md">Markdown</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Results Table / List -->
+    <section class="results-section hidden" id="results-section">
+      <div class="results-toolbar">
+        <div class="filter-tabs" id="filter-tabs" role="tablist"></div>
+        <div class="filter-search">
+          <input type="search" id="results-filter" placeholder="Фильтр по сайту, URL или тексту…" aria-label="Фильтр результатов">
+        </div>
+      </div>
+
+      <div class="results-list" id="results-list"></div>
+      <div class="empty-state hidden" id="empty-state">
+        По текущему фильтру ничего не найдено.
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <p>
+        <strong>Sherlock Hub</strong> агрегирует только открытые публичные источники (OSINT):
+        публичные профили, официальные API, DNS/RDAP и открытые метаданные. Закрытые и утекшие базы данных не используются.
+      </p>
+      <a href="/docs" target="_blank" rel="noopener" class="mono footer-link">REST API /docs</a>
+    </div>
+  </footer>
+
+  <!-- Slide-over Drawer (Engines / History) -->
+  <div class="drawer-backdrop hidden" id="drawer-backdrop"></div>
+  <aside class="drawer hidden" id="drawer" aria-modal="true" role="dialog">
+    <div class="drawer-header">
+      <h2 id="drawer-title">Движки</h2>
+      <button type="button" class="icon-btn" id="drawer-close" aria-label="Закрыть">&times;</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+name: Run OSINT Search
+
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: "Никнейм, email, телефон (+1...) или домен"
+        required: true
+        type: string
+      query_type:
+        description: "Тип запроса"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - username
+          - email
+          - phone
+          - domain
+      depth:
+        description: "Глубина сканирования"
+        required: true
+        default: "fast"
+        type: choice
+        options:
+          - fast
+          - standard
+          - deep
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Sherlock Hub search
+        env:
+          SEARCH_QUERY: ${{ inputs.query }}
+          SEARCH_TYPE: ${{ inputs.query_type }}
+          SEARCH_DEPTH: ${{ inputs.depth }}
+        run: |
+          mkdir -p artifacts
+          python cli.py search "$SEARCH_QUERY" --type "$SEARCH_TYPE" --depth "$SEARCH_DEPTH" -o artifacts/report.md
+          cat artifacts/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OSINT report artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sherlock-hub-report
+          path: artifacts/
+          retention-days: 7

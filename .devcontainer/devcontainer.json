@@ -1,0 +1,13 @@
+{
+  "name": "Sherlock Hub",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
+  "postAttachCommand": "uvicorn app.main:app --host 0.0.0.0 --port 8000",
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "Sherlock Hub Web UI",
+      "onAutoForward": "openBrowser"
+    }
+  }
+}
