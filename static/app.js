@@ -1,6 +1,9 @@
 (() => {
   "use strict";
 
+  const STORAGE_HISTORY_KEY = "sherlock_hub_history_v1";
+  const STORAGE_BACKEND_KEY = "sherlock_hub_backend_url";
+
   const TYPE_LABELS = {
     auto: "Авто",
     username: "Username",
@@ -24,6 +27,8 @@
   };
 
   const state = {
+    mode: "detecting", // "backend" | "browser"
+    apiBase: "",
     engines: [],
     selectedEngines: new Set(),
     queryType: "auto",
@@ -31,6 +36,7 @@
     depth: "standard",
     activeCategory: "all",
     filterText: "",
+    currentReport: null,
     currentReportId: null,
     findings: [],
     summary: null,
@@ -81,6 +87,7 @@
     btnEngines: $("btn-engines"),
     btnHistory: $("btn-history"),
     brandReset: $("brand-reset"),
+    footerDocsLink: $("footer-docs-link"),
   };
 
   function escapeHtml(str) {
@@ -131,8 +138,7 @@
     const qtype = effectiveType();
     const relevant = state.engines.filter((e) => {
       if (e.supported_types.includes(qtype)) return true;
-      // For email, also show username engines used for cross-check
-      if (qtype === "email" && ["direct-apis", "sherlock", "maigret"].includes(e.id)) return true;
+      if (qtype === "email" && ["direct-apis", "sherlock", "maigret", "browser-apis"].includes(e.id)) return true;
       return false;
     });
 
@@ -159,9 +165,88 @@
     });
   }
 
-  async function loadEngines() {
+  // --- LocalStorage History for GitHub Pages / Browser Mode ---
+  function readLocalReports() {
     try {
-      const res = await fetch("/api/engines");
+      const raw = localStorage.getItem(STORAGE_HISTORY_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveLocalReport(report) {
+    try {
+      const existing = readLocalReports().filter((r) => r.id !== report.id);
+      existing.unshift(report);
+      localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(existing.slice(0, 25)));
+    } catch (_) {}
+  }
+
+  function deleteLocalReport(id) {
+    try {
+      const next = readLocalReports().filter((r) => r.id !== id);
+      localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(next));
+    } catch (_) {}
+  }
+
+  async function probeBackend(baseUrl) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 2500);
+    try {
+      const res = await fetch(`${baseUrl}/api/health`, { signal: ctrl.signal });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return data && data.status === "ok";
+    } catch (_) {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function detectModeAndBoot() {
+    const customUrl = (localStorage.getItem(STORAGE_BACKEND_KEY) || "").trim().replace(/\/+$/, "");
+    let ok = false;
+    if (customUrl) {
+      ok = await probeBackend(customUrl);
+      if (ok) state.apiBase = customUrl;
+    }
+    if (!ok) {
+      ok = await probeBackend("");
+      if (ok) state.apiBase = "";
+    }
+
+    if (ok) {
+      state.mode = "backend";
+      const sub = document.querySelector(".brand-sub");
+      if (sub) sub.textContent = customUrl ? "Remote Backend" : "Full Backend";
+      if (els.footerDocsLink) {
+        els.footerDocsLink.href = `${state.apiBase}/docs`;
+        els.footerDocsLink.classList.remove("hidden");
+      }
+      await loadBackendEngines();
+      await loadHistory();
+    } else {
+      state.mode = "browser";
+      const sub = document.querySelector(".brand-sub");
+      if (sub) sub.textContent = "GitHub Pages · Browser Mode";
+      if (els.footerDocsLink) els.footerDocsLink.classList.add("hidden");
+      state.engines = (window.SherlockBrowserOSINT && window.SherlockBrowserOSINT.ENGINES) || [];
+      state.selectedEngines = new Set(
+        state.engines.filter((e) => e.available && e.default_enabled).map((e) => e.id)
+      );
+      const avail = state.engines.filter((e) => e.available).length;
+      els.enginesBadge.textContent = `${avail}/${state.engines.length}`;
+      renderInlineEngines();
+      await loadHistory();
+    }
+  }
+
+  async function loadBackendEngines() {
+    try {
+      const res = await fetch(`${state.apiBase}/api/engines`);
       state.engines = await res.json();
       state.selectedEngines = new Set(
         state.engines.filter((e) => e.available && e.default_enabled).map((e) => e.id)
@@ -169,14 +254,19 @@
       const avail = state.engines.filter((e) => e.available).length;
       els.enginesBadge.textContent = `${avail}/${state.engines.length}`;
       renderInlineEngines();
-    } catch (err) {
+    } catch (_) {
       els.enginesBadge.textContent = "!";
     }
   }
 
   async function loadHistory() {
+    if (state.mode === "browser") {
+      state.history = readLocalReports();
+      els.historyBadge.textContent = String(state.history.length);
+      return;
+    }
     try {
-      const res = await fetch("/api/history?limit=40");
+      const res = await fetch(`${state.apiBase}/api/history?limit=40`);
       state.history = await res.json();
       els.historyBadge.textContent = String(state.history.length);
     } catch (_) {}
@@ -260,7 +350,7 @@
     if (s.extra && s.extra.phone) {
       const p = s.extra.phone;
       if (p.location) facts.push(["Регион", p.location]);
-      if (p.carrier && p.carrier !== "Не определён") facts.push(["Оператор", p.carrier]);
+      if (p.carrier && p.carrier !== "Не определён" && p.carrier !== "—") facts.push(["Оператор", p.carrier]);
       if (p.line_type) facts.push(["Тип линии", p.line_type]);
     }
     if (s.extra && s.extra.registrar) {
@@ -375,7 +465,65 @@
     });
   }
 
-  function startSearch(query) {
+  function handleStarted(data) {
+    state.detectedType = data.detected_type;
+    state.engineRuns.clear();
+    for (const e of data.engines || []) {
+      state.engineRuns.set(e.engine_id, e);
+    }
+    renderEngineChips();
+    els.progressHeading.textContent = `Поиск «${data.query}» по ${data.engines.length} движкам…`;
+    els.progressMeta.textContent = `0 / ${data.engines.length}`;
+    renderDossier(data.query, data.detected_type, null, 0, 0, null, null);
+  }
+
+  function handleEngineUpdate(data, fallbackQuery) {
+    state.engineRuns.set(data.engine.engine_id, data.engine);
+    state.findings = data.findings || [];
+    state.summary = data.summary || null;
+
+    renderEngineChips();
+    els.progressMeta.textContent = `${data.completed} / ${data.total}`;
+    renderDossier(
+      els.dossierTitle.textContent || fallbackQuery,
+      state.detectedType,
+      state.summary,
+      data.total_unique,
+      data.multi_source_confirmed,
+      null,
+      null
+    );
+    renderFilterTabs();
+    renderResultsList();
+  }
+
+  function handleCompleted(report) {
+    state.currentReport = report;
+    state.findings = report.findings || [];
+    state.summary = report.summary || null;
+    state.engineRuns.clear();
+    for (const e of report.engines || []) {
+      state.engineRuns.set(e.engine_id, e);
+    }
+    renderEngineChips();
+    els.progressHeading.textContent = `Поиск завершён · ${report.total_unique} уникальных находок`;
+    els.progressMeta.textContent = `${(report.elapsed_ms / 1000).toFixed(1)}s`;
+    renderDossier(
+      report.query,
+      report.detected_type,
+      report.summary,
+      report.total_unique,
+      report.multi_source_confirmed,
+      report.elapsed_ms,
+      report.id
+    );
+    renderFilterTabs();
+    renderResultsList();
+    stopStream();
+    loadHistory();
+  }
+
+  async function startSearch(query) {
     stopStream();
 
     const cleaned = query.trim();
@@ -392,10 +540,27 @@
 
     state.findings = [];
     state.summary = null;
+    state.currentReport = null;
     state.currentReportId = null;
     state.activeCategory = "all";
     state.engineRuns.clear();
 
+    // Browser-native mode (GitHub Pages)
+    if (state.mode === "browser" && window.SherlockBrowserOSINT) {
+      const qtype = effectiveType();
+      const norm = qtype === "username" ? cleaned.replace(/^@/, "") : cleaned;
+      await window.SherlockBrowserOSINT.runBrowserSearch(norm, qtype, state.selectedEngines, {
+        onStarted: handleStarted,
+        onUpdate: (data) => handleEngineUpdate(data, norm),
+        onCompleted: (report) => {
+          saveLocalReport(report);
+          handleCompleted(report);
+        },
+      });
+      return;
+    }
+
+    // Full FastAPI Backend mode (SSE stream)
     const params = new URLSearchParams({
       q: cleaned,
       query_type: state.queryType,
@@ -405,68 +570,12 @@
       params.set("engines", Array.from(state.selectedEngines).join(","));
     }
 
-    const es = new EventSource(`/api/search/stream?${params.toString()}`);
+    const es = new EventSource(`${state.apiBase}/api/search/stream?${params.toString()}`);
     state.eventSource = es;
 
-    es.addEventListener("started", (ev) => {
-      const data = JSON.parse(ev.data);
-      state.detectedType = data.detected_type;
-      state.engineRuns.clear();
-      for (const e of data.engines || []) {
-        state.engineRuns.set(e.engine_id, e);
-      }
-      renderEngineChips();
-      els.progressHeading.textContent = `Поиск «${data.query}» по ${data.engines.length} движкам…`;
-      els.progressMeta.textContent = `0 / ${data.engines.length}`;
-      renderDossier(data.query, data.detected_type, null, 0, 0, null, null);
-    });
-
-    es.addEventListener("engine_update", (ev) => {
-      const data = JSON.parse(ev.data);
-      state.engineRuns.set(data.engine.engine_id, data.engine);
-      state.findings = data.findings || [];
-      state.summary = data.summary || null;
-
-      renderEngineChips();
-      els.progressMeta.textContent = `${data.completed} / ${data.total}`;
-      renderDossier(
-        els.dossierTitle.textContent || cleaned,
-        state.detectedType,
-        state.summary,
-        data.total_unique,
-        data.multi_source_confirmed,
-        null,
-        null
-      );
-      renderFilterTabs();
-      renderResultsList();
-    });
-
-    es.addEventListener("completed", (ev) => {
-      const report = JSON.parse(ev.data);
-      state.findings = report.findings || [];
-      state.summary = report.summary || null;
-      state.engineRuns.clear();
-      for (const e of report.engines || []) {
-        state.engineRuns.set(e.engine_id, e);
-      }
-      renderEngineChips();
-      els.progressHeading.textContent = `Поиск завершён · ${report.total_unique} уникальных находок`;
-      els.progressMeta.textContent = `${(report.elapsed_ms / 1000).toFixed(1)}s`;
-      renderDossier(
-        report.query,
-        report.detected_type,
-        report.summary,
-        report.total_unique,
-        report.multi_source_confirmed,
-        report.elapsed_ms,
-        report.id
-      );
-      renderFilterTabs();
-      renderResultsList();
-      stopStream();
-      loadHistory();
-    });
+    es.addEventListener("started", (ev) => handleStarted(JSON.parse(ev.data)));
+    es.addEventListener("engine_update", (ev) => handleEngineUpdate(JSON.parse(ev.data), cleaned));
+    es.addEventListener("completed", (ev) => handleCompleted(JSON.parse(ev.data)));
 
     es.onerror = () => {
       if (state.eventSource) {
@@ -479,9 +588,16 @@
 
   async function openReportById(id) {
     closeDrawer();
-    const res = await fetch(`/api/reports/${encodeURIComponent(id)}`);
-    if (!res.ok) return;
-    const report = await res.json();
+    let report = null;
+    if (state.mode === "browser") {
+      report = readLocalReports().find((r) => r.id === id) || null;
+    } else {
+      const res = await fetch(`${state.apiBase}/api/reports/${encodeURIComponent(id)}`);
+      if (res.ok) report = await res.json();
+    }
+    if (!report) return;
+
+    state.currentReport = report;
     els.input.value = report.query;
     updateDetectedBadge();
     els.searchSection.classList.add("compact");
@@ -523,24 +639,59 @@
   }
 
   function showEnginesDrawer() {
-    const html = state.engines
-      .map(
-        (e) => `
-        <div class="drawer-item">
-          <div class="drawer-item-head">
-            <span class="drawer-item-title">${escapeHtml(e.name)}</span>
-            <span class="status-pill ${e.available ? "ok" : "off"}">${e.available ? "Активен" : "Опционально"}</span>
+    const savedUrl = localStorage.getItem(STORAGE_BACKEND_KEY) || "";
+    const modeBox =
+      state.mode === "browser"
+        ? `
+        <div class="backend-box">
+          <div class="backend-box-title">Режим GitHub Pages (Browser OSINT)</div>
+          <p class="backend-box-desc">
+            Прямые запросы к CORS-совместимым публичным API, DoH, RDAP, crt.sh и Gravatar выполняются прямо в браузере.
+            Для полного сканирования <strong>Sherlock (400+)</strong> и <strong>Maigret (11 000+)</strong> укажите URL своего FastAPI-сервера или запустите GitHub Actions:
+          </p>
+          <div class="backend-row">
+            <input type="url" id="backend-url-input" placeholder="https://your-backend.example.com" value="${escapeHtml(savedUrl)}">
+            <button type="button" class="btn-ghost" id="btn-save-backend">Подключить</button>
           </div>
-          <p class="drawer-item-desc">${escapeHtml(e.description)}</p>
-          <div class="drawer-item-meta">
-            типы: ${e.supported_types.join(", ")} · режим: ${escapeHtml(e.mode)}
-            ${!e.available && e.availability_note ? `<br>${escapeHtml(e.availability_note)}` : ""}
-          </div>
+          <a class="actions-cta" href="https://github.com/David12-45/sherlock-hub/actions/workflows/osint-search.yml" target="_blank" rel="noopener">
+            → Запустить полный Sherlock + Maigret через GitHub Actions
+          </a>
         </div>
       `
-      )
-      .join("");
+        : "";
+
+    const html =
+      modeBox +
+      state.engines
+        .map(
+          (e) => `
+          <div class="drawer-item">
+            <div class="drawer-item-head">
+              <span class="drawer-item-title">${escapeHtml(e.name)}</span>
+              <span class="status-pill ${e.available ? "ok" : "off"}">${e.available ? "Активен" : "Опционально"}</span>
+            </div>
+            <p class="drawer-item-desc">${escapeHtml(e.description)}</p>
+            <div class="drawer-item-meta">
+              типы: ${e.supported_types.join(", ")} · режим: ${escapeHtml(e.mode)}
+              ${!e.available && e.availability_note ? `<br>${escapeHtml(e.availability_note)}` : ""}
+            </div>
+          </div>
+        `
+        )
+        .join("");
+
     openDrawer("Реестр OSINT-движков", html);
+
+    const saveBtn = $("btn-save-backend");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", async () => {
+        const val = ($("backend-url-input").value || "").trim().replace(/\/+$/, "");
+        if (val) localStorage.setItem(STORAGE_BACKEND_KEY, val);
+        else localStorage.removeItem(STORAGE_BACKEND_KEY);
+        closeDrawer();
+        await detectModeAndBoot();
+      });
+    }
   }
 
   async function showHistoryDrawer() {
@@ -577,7 +728,11 @@
     els.drawerBody.querySelectorAll(".history-del").forEach((btn) => {
       btn.addEventListener("click", async (ev) => {
         ev.stopPropagation();
-        await fetch(`/api/reports/${encodeURIComponent(btn.dataset.delId)}`, { method: "DELETE" });
+        if (state.mode === "browser") {
+          deleteLocalReport(btn.dataset.delId);
+        } else {
+          await fetch(`${state.apiBase}/api/reports/${encodeURIComponent(btn.dataset.delId)}`, { method: "DELETE" });
+        }
         showHistoryDrawer();
       });
     });
@@ -630,7 +785,11 @@
     btn.addEventListener("click", () => {
       if (!state.currentReportId) return;
       const fmt = btn.dataset.export;
-      window.location.href = `/api/reports/${encodeURIComponent(state.currentReportId)}/export?fmt=${fmt}`;
+      if (state.mode === "browser" && state.currentReport && window.SherlockBrowserOSINT) {
+        window.SherlockBrowserOSINT.exportReportClient(state.currentReport, fmt);
+      } else {
+        window.location.href = `${state.apiBase}/api/reports/${encodeURIComponent(state.currentReportId)}/export?fmt=${fmt}`;
+      }
     });
   });
 
@@ -655,6 +814,5 @@
   });
 
   // Boot
-  loadEngines();
-  loadHistory();
+  detectModeAndBoot();
 })();

@@ -18,7 +18,10 @@
 
 ## Быстрый запуск
 
-### Прямо с GitHub (Codespaces — веб-интерфейс в браузере)
+### Прямо в браузере (GitHub Pages — без установки)
+Откройте **[https://david12-45.github.io/sherlock-hub/](https://david12-45.github.io/sherlock-hub/)** — интерфейс работает прямо в браузере (13+ публичных CORS API, DNS-over-HTTPS, RDAP, crt.sh, Gravatar, разбор номеров и быстрые ссылки), а также позволяет подключить URL своего FastAPI-бэкенда для полного сканирования Sherlock и Maigret.
+
+### Прямо с GitHub (Codespaces — полный Python-бэкенд в браузере)
 Нажмите **Code → Codespaces → Create codespace on main**. Контейнер автоматически установит зависимости и запустит веб-интерфейс на порту `8000` (`.devcontainer/devcontainer.json`).
 
 ### Прямо с GitHub (GitHub Actions — запуск поиска без локальной установки)

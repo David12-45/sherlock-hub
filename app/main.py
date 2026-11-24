@@ -64,6 +64,21 @@ async def serve_index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/styles.css", include_in_schema=False)
+async def serve_css() -> FileResponse:
+    return FileResponse(STATIC_DIR / "styles.css")
+
+
+@app.get("/app.js", include_in_schema=False)
+async def serve_app_js() -> FileResponse:
+    return FileResponse(STATIC_DIR / "app.js")
+
+
+@app.get("/browser-engines.js", include_in_schema=False)
+async def serve_browser_js() -> FileResponse:
+    return FileResponse(STATIC_DIR / "browser-engines.js")
+
+
 @app.get("/api/health")
 async def health() -> dict[str, object]:
     engines = aggregator.list_engines()

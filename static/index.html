@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <header class="topbar">
@@ -169,7 +169,10 @@
         <strong>Sherlock Hub</strong> агрегирует только открытые публичные источники (OSINT):
         публичные профили, официальные API, DNS/RDAP и открытые метаданные. Закрытые и утекшие базы данных не используются.
       </p>
-      <a href="/docs" target="_blank" rel="noopener" class="mono footer-link">REST API /docs</a>
+      <div class="footer-links">
+        <a href="https://github.com/David12-45/sherlock-hub" target="_blank" rel="noopener" class="mono footer-link">GitHub</a>
+        <a href="/docs" target="_blank" rel="noopener" class="mono footer-link" id="footer-docs-link">REST API /docs</a>
+      </div>
     </div>
   </footer>
 
@@ -183,6 +186,7 @@
     <div class="drawer-body" id="drawer-body"></div>
   </aside>
 
-  <script src="/static/app.js"></script>
+  <script src="./browser-engines.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>
